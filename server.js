@@ -1,16 +1,24 @@
 const path = require("path");
 const express = require("express");
+const { PrismaClient } = require("@prisma/client")
 const compression = require("compression");
 const morgan = require("morgan");
 const { createRequestHandler } = require("@remix-run/express");
 
 const app = express();
+const prisma = new PrismaClient()
+
+console.log(prisma, "prisma from server.js");
+
 const http = require("http");
 const server = http.createServer(app);
 const { Server } = require("socket.io");
+const {
+  loginUserEventHandler,
+  disconnectEventHandler,
+} = require("./socket/handlers.js");
 
 const BUILD_DIR = path.join(process.cwd(), "build");
-
 
 app.use(compression());
 
@@ -18,45 +26,22 @@ app.use(compression());
 app.disable("x-powered-by");
 
 // Socket.io server
+// TODO: SHOULD THIS BE STORED IN A DATABASE?
 const onlineUsers = {};
 
 const io = new Server(server);
 
 io.on("connection", (socket) => {
-  console.log("a user connected");
-
   socket.broadcast.emit("serverMessage", `a user connected ${socket.id}`);
 
-  socket.on("join", (data) => joinEventHandler(socket, data));
+  socket.on("login-user", (data) => {
+    loginUserEventHandler(socket, data, onlineUsers)
+  });
 
   socket.on("disconnect", () => {
-    console.log("user disconnected");
-    disconnectEventHandler(socket.id);
-
+    disconnectEventHandler(socket.id, onlineUsers);
   });
 });
-
-// Socket event handlers
-const disconnectEventHandler = (socketId) => {
-  console.log(`user disconnected ${socketId}`);
-  removeOnlineUser(socketId);
-};
-
-const joinEventHandler = (socket, data) => {
-  onlineUsers[socket.id] = {
-    id: socket.id,
-    username: data.username,
-    location: data.coords,
-  };
-  console.log(onlineUsers);
-};
-
-const removeOnlineUser = (socketId) => {
-  if(!onlineUsers[socketId]) return;
-  delete onlineUsers[socketId];
-  console.log(onlineUsers);
-}
-
 
 // Remix fingerprints its assets so we can cache forever.
 app.use(
@@ -67,24 +52,22 @@ app.use(
 // Everything else (like favicon.ico) is cached for an hour. You may want to be
 // more aggressive with this caching.
 app.use(express.static("public", { maxAge: "1h" }));
-
 app.use(morgan("tiny"));
-
 app.all(
   "*",
   process.env.NODE_ENV === "development"
     ? (req, res, next) => {
-      purgeRequireCache();
+        purgeRequireCache();
 
-      return createRequestHandler({
+        return createRequestHandler({
+          build: require(BUILD_DIR),
+          mode: process.env.NODE_ENV,
+        })(req, res, next);
+      }
+    : createRequestHandler({
         build: require(BUILD_DIR),
         mode: process.env.NODE_ENV,
-      })(req, res, next);
-    }
-    : createRequestHandler({
-      build: require(BUILD_DIR),
-      mode: process.env.NODE_ENV,
-    })
+      })
 );
 const port = process.env.PORT || 3000;
 
